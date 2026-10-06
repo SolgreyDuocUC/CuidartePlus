@@ -1,0 +1,12 @@
+# Override SOLO para desarrollo/análisis local (SAST/DAST, clientes SQL, Swagger).
+# Publica la base de datos y la API únicamente en 127.0.0.1 (nunca en 0.0.0.0).
+# NO usar en EC2.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  cuidarteplus-postgres-ev:
+    ports:
+      - "127.0.0.1:${PORT_POSTGRES:-15442}:5432"
+
+  cuidarteplus-backend-ev:
+    ports:
+      - "127.0.0.1:${PORT_BACKEND:-4444}:4000"

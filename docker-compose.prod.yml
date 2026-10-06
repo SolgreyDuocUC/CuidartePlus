@@ -1,0 +1,9 @@
+# Override para producción (EC2): usa las imágenes publicadas en GHCR
+# en lugar de construirlas en el servidor.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+services:
+  cuidarteplus-backend-ev:
+    image: ghcr.io/solgreyduocuc/cuidarteplus-backend:${IMAGE_TAG:-latest}
+
+  cuidarteplus-frontend-ev:
+    image: ghcr.io/solgreyduocuc/cuidarteplus-frontend:${IMAGE_TAG:-latest}

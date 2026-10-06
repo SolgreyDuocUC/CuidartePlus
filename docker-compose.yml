@@ -1,14 +1,20 @@
+# Cuidarte+ — orquestación de servicios
+# Solo el frontend (nginx) publica un puerto en el host. La base de datos y el backend
+# son privados: viven en redes internas de Docker y no son accesibles desde fuera.
+#
+#   Internet ──► frontend (nginx :80) ──/api/──► backend (:4000) ──► postgres (:5432)
+#                 red: cuidarteplus-public        red: cuidarteplus-private (internal)
+
 services:
   cuidarteplus-postgres-ev:
     image: postgres:15-alpine
     container_name: cuidarteplus-postgres-ev
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
       POSTGRES_DB: ${POSTGRES_DB:-cuidarteplus}
       PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "${PORT_POSTGRES:-15442}:5432"
+    # Sin "ports": la base de datos NO se expone al host
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./BACKEND/sql/dump-cuidarteplus.sql:/tmp/dump-cuidarteplus.sql:ro
@@ -18,8 +24,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - cuidarteplus-network
+      - cuidarteplus-private
     restart: unless-stopped
 
   cuidarteplus-backend-ev:
@@ -30,19 +38,25 @@ services:
     hostname: cuidarteplus-api
     environment:
       - PORT=4000
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@cuidarteplus-postgres-ev:5432/${POSTGRES_DB:-cuidarteplus}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}@cuidarteplus-postgres-ev:5432/${POSTGRES_DB:-cuidarteplus}
       - NODE_ENV=${NODE_ENV:-production}
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
-      - FRONTEND_URL=http://localhost:${PORT_FRONTEND:-3333}
-    ports:
-      - "${PORT_BACKEND:-4444}:4000"
+      - JWT_SECRET=${JWT_SECRET:?Define JWT_SECRET en .env}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3333}
+    # Sin "ports": la API solo es accesible desde nginx (/api/)
+    expose:
+      - "4000"
     depends_on:
       cuidarteplus-postgres-ev:
         condition: service_healthy
     volumes:
       - ./BACKEND/uploads:/app/uploads
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
-      - cuidarteplus-network
+      - cuidarteplus-private
+      - cuidarteplus-public
     restart: unless-stopped
 
   cuidarteplus-frontend-ev:
@@ -50,22 +64,31 @@ services:
       context: ./FRONTEND
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: "http://localhost:${PORT_BACKEND:-4444}"
+        # Ruta relativa: el navegador llama a la API a través del mismo nginx
+        VITE_API_URL: "/api"
     container_name: cuidarteplus-frontend-ev
     hostname: cuidarteplus-web
     ports:
       - "${PORT_FRONTEND:-3333}:80"
     depends_on:
-      - cuidarteplus-backend-ev
+      cuidarteplus-backend-ev:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - cuidarteplus-network
+      - cuidarteplus-public
     restart: unless-stopped
 
 volumes:
   postgres_data:
 
 networks:
-  cuidarteplus-network:
+  # Red expuesta: frontend <-> backend
+  cuidarteplus-public:
     driver: bridge
-    name: cuidarteplus-network
-
+    name: cuidarteplus-public
+  # Red interna sin salida a internet: backend <-> base de datos
+  cuidarteplus-private:
+    driver: bridge
+    name: cuidarteplus-private
+    internal: true

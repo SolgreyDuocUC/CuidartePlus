@@ -1,2 +1,18 @@
-BACKEND/node_modules
-FRONTEND/node_modules
+# Dependencias
+node_modules/
+
+# Variables de entorno y secretos (solo se versionan las plantillas .env.example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Archivos subidos por usuarios
+BACKEND/uploads/
+
+# Build / logs / SO
+FRONTEND/dist/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,24 +1,30 @@
-FROM node:18-alpine
+FROM node:20-alpine
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
 # Copiar archivos de dependencias
 COPY package*.json ./
 
-# Instalar dependencias
-RUN npm ci --only=production
+# Instalar solo dependencias de producción
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copiar código de la aplicación
 COPY src/ ./src/
 COPY sql/ ./sql/
-COPY uploads/ ./uploads/
 
-# Crear directorio para uploads si no existe
-RUN mkdir -p uploads/contracts
+# Crear directorio para uploads y entregarlo al usuario sin privilegios
+RUN mkdir -p uploads/documentos && chown -R node:node /app/uploads
 
-# Exponer puerto
-EXPOSE 3000
+# Ejecutar como usuario no-root
+USER node
+
+# Puerto interno (solo accesible dentro de la red de Docker)
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:4000/ || exit 1
 
 # Comando para iniciar la aplicación
 CMD ["node", "src/app.js"]
-
