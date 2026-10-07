@@ -63,7 +63,7 @@ jobs:
           tags: |
             ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:latest
             ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:${{ github.sha }}
-          # Vincula la imagen al repo para que GITHUB_TOKEN pueda descargarla desde EC2
+          # Vincula la imagen al repo para que se puedan gestionar permisos de GHCR
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=${{ matrix.service }}
@@ -84,7 +84,7 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -93,15 +93,22 @@ jobs:
           envs: GHCR_USER,GHCR_TOKEN,IMAGE_TAG
           script: |
             set -e
-            cd ${{ vars.DEPLOY_PATH || '~/CuidartePlus' }}
-            # Código necesario en el servidor: compose + scripts SQL de inicialización
+            cd ${{ vars.DEPLOY_PATH || '/home/ubuntu/CuidartePlus' }}
             git fetch origin deploy
             git reset --hard origin/deploy
             mkdir -p BACKEND/uploads/documentos
+
+            # Autenticación en GHCR
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            export IMAGE_TAG
+
+            # Exportar la variable para que docker compose.prod.yml lea el tag exacto
+            export IMAGE_TAG="${{ github.sha }}"
+
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
-            $COMPOSE pull cuidarteplus-backend-ev cuidarteplus-frontend-ev
+
+            # Descarga todas las imágenes definidas sin forzar nombres específicos de servicios
+            $COMPOSE pull
             $COMPOSE up -d --no-build --remove-orphans
+
             docker logout ghcr.io
             docker image prune -f
