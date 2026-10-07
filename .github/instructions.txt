@@ -1,0 +1,238 @@
+===============================================================================
+ CUIDARTE+ — DESPLIEGUE MANUAL EN AWS EC2 DESDE LA TERMINAL DE UBUNTU
+===============================================================================
+
+Arquitectura de red (definida en docker-compose.yml):
+
+  Internet ──► frontend (nginx :80) ──/api/──► backend (:4000) ──► postgres (:5432)
+               red: cuidarteplus-public         red: cuidarteplus-private (internal)
+
+  - Solo el frontend publica un puerto en el host (-p / "ports").
+  - Backend y base de datos NO publican puertos: solo se alcanzan por nombre de
+    contenedor dentro de las redes de Docker.
+  - cuidarteplus-private es "internal": no tiene salida a internet.
+
+
+===============================================================================
+ ⚠ PENDIENTE: CARGAR LOS SECRETS DE AMAZON EN GITHUB (NO EN EL REPOSITORIO)
+===============================================================================
+Los valores reales NUNCA se escriben en este archivo ni en ningún archivo del
+repo. Se cargan a mano en GitHub:
+  Settings > Secrets and variables > Actions
+
+  [ ] Secret    EC2_HOST         Elastic IP o DNS público de la instancia
+  [ ] Secret    EC2_USER         ubuntu
+  [ ] Secret    EC2_SSH_KEY      Contenido COMPLETO de vm.pem
+                                 (desde "-----BEGIN" hasta "-----END ...-----")
+  [ ] Variable  DEPLOY_ENABLED   true   (mientras no sea "true", no se despliega)
+  [ ] Variable  DEPLOY_PATH      ~/CuidartePlus   (opcional, es el valor por defecto)
+
+  [ ] Settings > Environments > production > Deployment branches:
+      permitir SOLO la rama "deploy".
+  [ ] (Opcional) En el mismo environment, activar "Required reviewers" para
+      aprobar manualmente cada despliegue.
+  [ ] Settings > Branches: proteger la rama "deploy" (exigir PR, sin force-push).
+
+En el servidor EC2 (no en GitHub) va el archivo .env con POSTGRES_PASSWORD y
+JWT_SECRET, generado en el PASO 1. Ese .env tampoco se sube al repositorio.
+
+Reglas:
+  - .env, *.pem y *.key están en .gitignore. Verifica antes de cada commit:
+      git status          (no deben aparecer .env ni vm.pem)
+  - No pegues claves en issues, PRs, commits ni capturas de pantalla.
+  - Si una clave se filtra: rótala de inmediato (nueva key pair en AWS,
+    nuevo JWT_SECRET / POSTGRES_PASSWORD) y actualiza el secret en GitHub.
+
+
+-------------------------------------------------------------------------------
+ PASO 0: Conectarse a la instancia
+-------------------------------------------------------------------------------
+Desde tu terminal Ubuntu local:
+
+  chmod 400 vm.pem
+  ssh -i vm.pem ubuntu@<ELASTIC_IP>
+
+
+-------------------------------------------------------------------------------
+ PASO 1: Preparar el servidor (solo la primera vez)
+-------------------------------------------------------------------------------
+  sudo apt update && sudo apt -y upgrade
+  sudo apt install -y docker.io docker-compose-v2 git
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker ubuntu
+  exit        # vuelve a conectarte por SSH para aplicar el grupo docker
+
+Comprobar:
+
+  docker --version
+  docker compose version
+
+Clonar el repositorio y crear el .env de producción:
+
+  git clone https://github.com/SolgreyDuocUC/CuidartePlus.git ~/CuidartePlus
+  cd ~/CuidartePlus
+  git checkout deploy
+
+  cp .env.example .env
+  sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" .env
+  sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$(openssl rand -hex 32)|" .env
+  sed -i "s|^PORT_FRONTEND=.*|PORT_FRONTEND=80|" .env
+  sed -i "s|^FRONTEND_URL=.*|FRONTEND_URL=http://<ELASTIC_IP>|" .env
+  chmod 600 .env
+
+  mkdir -p BACKEND/uploads/documentos
+
+IMPORTANTE: el archivo .env NUNCA se sube al repositorio.
+
+
+===============================================================================
+ OPCIÓN A (RECOMENDADA): DESPLEGAR CON DOCKER COMPOSE
+===============================================================================
+
+A.1  Usando las imágenes publicadas en GHCR por GitHub Actions
+--------------------------------------------------------------
+  cd ~/CuidartePlus
+
+  # Solo si las imágenes son privadas (token con permiso read:packages)
+  echo "<GITHUB_TOKEN>" | docker login ghcr.io -u <USUARIO_GITHUB> --password-stdin
+
+  COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+  $COMPOSE pull cuidarteplus-backend-ev cuidarteplus-frontend-ev
+  $COMPOSE up -d --no-build --remove-orphans
+
+  docker logout ghcr.io
+
+  # Para desplegar una versión concreta (SHA del commit):
+  IMAGE_TAG=<sha> $COMPOSE up -d --no-build
+
+A.2  Construyendo las imágenes directamente en el servidor
+----------------------------------------------------------
+  cd ~/CuidartePlus
+  docker compose up -d --build
+
+  (En instancias t2/t3.micro el build puede quedarse sin memoria; en ese caso
+   usa A.1 o agrega swap.)
+
+A.3  Actualizar a una nueva versión
+-----------------------------------
+  cd ~/CuidartePlus
+  git pull origin deploy
+  # luego repite A.1 (pull + up) o A.2 (up --build)
+  docker image prune -f
+
+NO usar docker-compose.dev.yml en EC2: publica la BD y la API (aunque sea en
+127.0.0.1) y está pensado solo para análisis local.
+
+
+===============================================================================
+ OPCIÓN B: DESPLEGAR CONTENEDOR A CONTENEDOR CON "docker run"
+===============================================================================
+Equivalente manual de lo que hace Compose. Útil para entender o depurar.
+Carga primero las variables del .env en la sesión:
+
+  cd ~/CuidartePlus
+  set -a; . ./.env; set +a
+
+B.1  Crear las redes
+--------------------
+  docker network create --driver bridge cuidarteplus-public
+  docker network create --driver bridge --internal cuidarteplus-private
+
+B.2  Base de datos (PRIVADA — sin -p)
+-------------------------------------
+  docker volume create postgres_data
+
+  docker run -d \
+    --name cuidarteplus-postgres-ev \
+    --network cuidarteplus-private \
+    --restart unless-stopped \
+    --security-opt no-new-privileges:true \
+    -e POSTGRES_USER="$POSTGRES_USER" \
+    -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+    -e POSTGRES_DB="$POSTGRES_DB" \
+    -e PGDATA=/var/lib/postgresql/data/pgdata \
+    -v postgres_data:/var/lib/postgresql/data \
+    -v "$PWD/BACKEND/sql/dump-cuidarteplus.sql:/tmp/dump-cuidarteplus.sql:ro" \
+    -v "$PWD/BACKEND/sql/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro" \
+    postgres:15-alpine
+
+B.3  Backend / API (PRIVADO — sin -p)
+-------------------------------------
+  docker run -d \
+    --name cuidarteplus-backend-ev \
+    --hostname cuidarteplus-api \
+    --network cuidarteplus-private \
+    --restart unless-stopped \
+    --security-opt no-new-privileges:true \
+    --cap-drop ALL \
+    -e PORT=4000 \
+    -e NODE_ENV=production \
+    -e DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@cuidarteplus-postgres-ev:5432/$POSTGRES_DB" \
+    -e JWT_SECRET="$JWT_SECRET" \
+    -e FRONTEND_URL="$FRONTEND_URL" \
+    -v "$PWD/BACKEND/uploads:/app/uploads" \
+    ghcr.io/solgreyduocuc/cuidarteplus-backend:latest
+
+  # El backend también debe estar en la red pública para que nginx lo alcance:
+  docker network connect cuidarteplus-public cuidarteplus-backend-ev
+
+Nota: dentro de las redes de Docker, el host de la BD es el nombre del
+contenedor (cuidarteplus-postgres-ev); Docker lo resuelve automáticamente.
+
+B.4  Frontend (PÚBLICO — único con -p)
+--------------------------------------
+  docker run -d \
+    --name cuidarteplus-frontend-ev \
+    --hostname cuidarteplus-web \
+    --network cuidarteplus-public \
+    --restart unless-stopped \
+    --security-opt no-new-privileges:true \
+    -p 80:80 \
+    ghcr.io/solgreyduocuc/cuidarteplus-frontend:latest
+
+Si mezclas ambas opciones, elimina antes los contenedores existentes:
+  docker rm -f cuidarteplus-frontend-ev cuidarteplus-backend-ev cuidarteplus-postgres-ev
+
+
+===============================================================================
+ PASO FINAL 1: Verificar el despliegue
+===============================================================================
+  docker compose ps                         # todos "running" / "healthy"
+  docker compose logs -f cuidarteplus-backend-ev
+  curl -I http://localhost                  # debe responder 200 (nginx)
+
+Comprobar que SOLO el frontend publica puertos:
+  docker ps --format "table {{.Names}}\t{{.Ports}}"
+  sudo ss -tlnp | grep -E ':(80|4000|5432)\b'   # solo debe aparecer :80
+
+Desde tu máquina local (NO desde EC2):
+  curl -I http://<ELASTIC_IP>               # 200
+  nc -zv <ELASTIC_IP> 5432                  # debe fallar (timeout)
+  nc -zv <ELASTIC_IP> 4000                  # debe fallar (timeout)
+
+
+===============================================================================
+ PASO FINAL 2: Security Group en AWS
+===============================================================================
+EC2 > Instancias > (tu instancia) > pestaña Seguridad > clic en el Security Group
+> Reglas de entrada (Inbound rules). Deja únicamente:
+
+  Puerto       Origen          Motivo
+  22  (SSH)    Tu IP/32 *      Administración
+  80  (HTTP)   0.0.0.0/0       Aplicación (nginx)
+  443 (HTTPS)  0.0.0.0/0       Solo si habilitas TLS
+
+  * Si usas el despliegue automático de GitHub Actions, los runners tienen IPs
+    variables y el 22 debe quedar abierto (protegido solo por la llave .pem).
+
+NO agregues reglas para 4000, 4444 (API), 5432 ni 15442 (PostgreSQL).
+
+
+===============================================================================
+ COMANDOS ÚTILES
+===============================================================================
+  docker compose down                 # detener (conserva los datos)
+  docker compose down -v              # detener y BORRAR la base de datos
+  docker compose restart <servicio>
+  docker compose exec cuidarteplus-postgres-ev psql -U postgres -d cuidarteplus
+  docker stats

@@ -226,7 +226,7 @@ Variables de la raíz:
 ### 5.2 Preparar el servidor (una sola vez)
 
 ```bash
-ssh -i cuidarteplus.pem ubuntu@<ELASTIC_IP>
+ssh -i vm.pem ubuntu@<ELASTIC_IP>
 
 # Docker y git
 sudo apt update && sudo apt -y upgrade
