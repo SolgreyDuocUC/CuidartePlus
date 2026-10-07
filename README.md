@@ -4,7 +4,7 @@ Proyecto desarrollado para la asignatura **ISY1102 – Calidad y Seguridad en el
 
 Cuidarte+ permite a **médicos** registrar pacientes y exámenes médicos, a **pacientes** visualizar su información clínica y a **administradores** supervisar, auditar y administrar usuarios y datos, cumpliendo la normativa de protección de datos y los estándares de seguridad.
 
-> ⚠️ **Contexto académico:** el código de la aplicación contiene vulnerabilidades **intencionales** para ejercicios de análisis estático (SAST) y dinámico (DAST). El endurecimiento descrito en este documento se aplica a la **infraestructura y los contenedores**, no corrige esas vulnerabilidades del código.
+> **Contexto académico:** el código de la aplicación contiene vulnerabilidades **intencionales** para ejercicios de análisis estático (SAST) y dinámico (DAST). El endurecimiento descrito en este documento se aplica a la **infraestructura y los contenedores**, no corrige esas vulnerabilidades del código.
 
 ---
 
@@ -198,7 +198,7 @@ Variables de la raíz:
 | `PORT_POSTGRES` / `PORT_BACKEND` | — | Solo con `docker-compose.dev.yml` (ligados a 127.0.0.1). |
 | `NODE_ENV` | — | `production` por defecto. |
 
-> 🔐 Si un secreto llega a publicarse (en un commit, un issue, un chat…), **rótalo**: quitarlo del repositorio no lo elimina del historial de git.
+> Si un secreto llega a publicarse (en un commit, un issue, un chat…), **rótalo**: quitarlo del repositorio no lo elimina del historial de git.
 
 ---
 
