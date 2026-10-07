@@ -84,7 +84,6 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_USER: ${{ github.actor }}
-          # Usar un PAT (Personal Access Token) si el repositorio o paquete es privado
           GHCR_TOKEN: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
         with:
@@ -94,21 +93,20 @@ jobs:
           envs: GHCR_USER,GHCR_TOKEN,IMAGE_TAG
           script: |
             set -e
-            cd ${{ vars.DEPLOY_PATH || '~/CuidartePlus' }}
-
-            # Actualiza el código del repositorio en EC2
+            cd ${{ vars.DEPLOY_PATH || '/home/ubuntu/CuidartePlus' }}
             git fetch origin deploy
             git reset --hard origin/deploy
-
-            # Asegura directorios requeridos
             mkdir -p BACKEND/uploads/documentos
 
-            # Autenticación y despliegue
+            # Autenticación en GHCR
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            export IMAGE_TAG
+
+            # Exportar la variable para que docker compose.prod.yml lea el tag exacto
+            export IMAGE_TAG="${{ github.sha }}"
+
             COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
 
-            # Nota: Asegúrate de que los nombres de los servicios coincidan con tu docker-compose.yml
+            # Descarga todas las imágenes definidas sin forzar nombres específicos de servicios
             $COMPOSE pull
             $COMPOSE up -d --no-build --remove-orphans
 
