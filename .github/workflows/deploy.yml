@@ -86,17 +86,40 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
+          # Configuración de la app: se escribe en .env en la EC2
+          APP_POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          APP_POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          APP_POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          APP_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          APP_COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME || 'cuidarteplus-ev' }}
+          APP_NODE_ENV: ${{ vars.NODE_ENV || 'production' }}
+          APP_PORT_FRONTEND: ${{ vars.PORT_FRONTEND || '3333' }}
+          APP_FRONTEND_URL: ${{ vars.FRONTEND_URL }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: GHCR_USER,GHCR_TOKEN,IMAGE_TAG
+          envs: GHCR_USER,GHCR_TOKEN,IMAGE_TAG,APP_POSTGRES_USER,APP_POSTGRES_PASSWORD,APP_POSTGRES_DB,APP_JWT_SECRET,APP_COMPOSE_PROJECT_NAME,APP_NODE_ENV,APP_PORT_FRONTEND,APP_FRONTEND_URL
           script: |
             set -e
             cd ${{ vars.DEPLOY_PATH || '/home/ubuntu/CuidartePlus' }}
             git fetch origin deploy
             git reset --hard origin/deploy
             mkdir -p BACKEND/uploads/documentos
+
+            # Genera el .env a partir de los secrets/variables de GitHub (solo legible por el usuario)
+            umask 077
+            {
+              printf 'COMPOSE_PROJECT_NAME=%s\n' "$APP_COMPOSE_PROJECT_NAME"
+              printf 'NODE_ENV=%s\n' "$APP_NODE_ENV"
+              printf 'POSTGRES_USER=%s\n' "$APP_POSTGRES_USER"
+              printf 'POSTGRES_PASSWORD=%s\n' "$APP_POSTGRES_PASSWORD"
+              printf 'POSTGRES_DB=%s\n' "$APP_POSTGRES_DB"
+              printf 'JWT_SECRET=%s\n' "$APP_JWT_SECRET"
+              printf 'PORT_FRONTEND=%s\n' "$APP_PORT_FRONTEND"
+              printf 'FRONTEND_URL=%s\n' "$APP_FRONTEND_URL"
+            } > .env
+            umask 022
 
             # Autenticación en GHCR
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
