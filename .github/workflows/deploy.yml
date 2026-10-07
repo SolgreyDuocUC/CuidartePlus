@@ -11,6 +11,10 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
+# Mínimo privilegio por defecto; cada job pide solo lo que necesita
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   # GHCR exige nombres en minúsculas
@@ -35,23 +39,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login en GHCR
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/deploy'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build (y push en main)
+      - name: Build (y push solo en la rama deploy)
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/deploy' }}
           build-args: |
             VITE_API_URL=/api
           tags: |
@@ -67,7 +73,7 @@ jobs:
   deploy:
     name: Deploy en EC2
     needs: build
-    if: github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/deploy' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -89,8 +95,8 @@ jobs:
             set -e
             cd ${{ vars.DEPLOY_PATH || '~/CuidartePlus' }}
             # Código necesario en el servidor: compose + scripts SQL de inicialización
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin deploy
+            git reset --hard origin/deploy
             mkdir -p BACKEND/uploads/documentos
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             export IMAGE_TAG
