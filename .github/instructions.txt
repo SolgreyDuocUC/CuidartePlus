@@ -20,12 +20,31 @@ Los valores reales NUNCA se escriben en este archivo ni en ningún archivo del
 repo. Se cargan a mano en GitHub:
   Settings > Secrets and variables > Actions
 
-  [ ] Secret    EC2_HOST         Elastic IP o DNS público de la instancia
-  [ ] Secret    EC2_USER         ubuntu
-  [ ] Secret    EC2_SSH_KEY      Contenido COMPLETO de vm.pem
-                                 (desde "-----BEGIN" hasta "-----END ...-----")
-  [ ] Variable  DEPLOY_ENABLED   true   (mientras no sea "true", no se despliega)
-  [ ] Variable  DEPLOY_PATH      ~/CuidartePlus   (opcional, es el valor por defecto)
+SECRETS (pestaña "Secrets"):
+  [ ] EC2_HOST           Elastic IP o DNS público de la instancia
+  [ ] EC2_USER           ubuntu
+  [ ] EC2_SSH_KEY        Contenido COMPLETO de vm.pem
+                         (desde "-----BEGIN" hasta "-----END ...-----")
+  [ ] POSTGRES_USER      postgres
+  [ ] POSTGRES_PASSWORD  openssl rand -hex 24   (sin "$": Compose lo interpreta)
+  [ ] POSTGRES_DB        cuidarteplus
+  [ ] JWT_SECRET         openssl rand -hex 32
+  [ ] GHCR_PAT           (opcional) solo si el pull desde GHCR falla por permisos
+
+VARIABLES (pestaña "Variables"):
+  [ ] DEPLOY_ENABLED        true   (mientras no sea "true", no se despliega)
+  [ ] DEPLOY_PATH           /home/ubuntu/CuidartePlus   (opcional, es el valor por defecto)
+  [ ] FRONTEND_URL          http://<ELASTIC_IP>:<PORT_FRONTEND>
+  [ ] PORT_FRONTEND         3333   (opcional, por defecto 3333)
+  [ ] NODE_ENV              production   (opcional)
+  [ ] COMPOSE_PROJECT_NAME  cuidarteplus-ev   (opcional; ojo con el nombre exacto)
+
+NO crear: IMAGE_TAG, GHCR_USER ni GITHUB_TOKEN (el workflow los obtiene solo).
+PORT_BACKEND y PORT_POSTGRES solo los usa docker-compose.dev.yml (local).
+
+El workflow genera el .env en la EC2 en cada despliegue a partir de estos
+secrets/variables (permisos 600). Si la base de datos ya existe (volumen
+postgres_data), POSTGRES_PASSWORD debe ser la MISMA con la que se creó.
 
   [ ] Settings > Environments > production > Deployment branches:
       permitir SOLO la rama "deploy".
@@ -33,8 +52,8 @@ repo. Se cargan a mano en GitHub:
       aprobar manualmente cada despliegue.
   [ ] Settings > Branches: proteger la rama "deploy" (exigir PR, sin force-push).
 
-En el servidor EC2 (no en GitHub) va el archivo .env con POSTGRES_PASSWORD y
-JWT_SECRET, generado en el PASO 1. Ese .env tampoco se sube al repositorio.
+Si despliegas a mano (sin GitHub Actions), el .env de la EC2 se genera en el
+PASO 1. Ese .env nunca se sube al repositorio.
 
 Reglas:
   - .env, *.pem y *.key están en .gitignore. Verifica antes de cada commit:
@@ -236,3 +255,72 @@ NO agregues reglas para 4000, 4444 (API), 5432 ni 15442 (PostgreSQL).
   docker compose restart <servicio>
   docker compose exec cuidarteplus-postgres-ev psql -U postgres -d cuidarteplus
   docker stats
+
+
+===============================================================================
+ SOLUCIÓN DE PROBLEMAS DEL DESPLIEGUE AUTOMÁTICO (GitHub Actions → EC2)
+===============================================================================
+El error real está en el log del paso "Deploy vía SSH con docker compose"
+(Actions > ejecución > job "Deploy en EC2"). El resumen de la ejecución solo
+dice "exit code 1". Los avisos de "Node.js 20 is deprecated" y "ubuntu-latest
+will migrate to Ubuntu 26" son advertencias y NO causan el fallo.
+
+1) ssh.ParsePrivateKey: ssh: no key found
+   Causa: EC2_SSH_KEY vacío, incompleto o en formato .ppk (PuTTY).
+   Solución: pegar el .pem COMPLETO, con las líneas BEGIN/END. Lo más seguro:
+     gh secret set EC2_SSH_KEY < vm.pem
+
+2) dial tcp <IP>:22: i/o timeout
+   Causa: GitHub no llega al puerto 22 de la instancia.
+   Revisar en AWS:
+     - La instancia está "Running".
+     - EC2_HOST es la IP PÚBLICA actual (no la privada 172.31.x.x). Al detener
+       e iniciar la instancia la IP cambia: asignar una Elastic IP y actualizar
+       EC2_HOST y FRONTEND_URL.
+     - Security Group: entrada SSH 22 desde 0.0.0.0/0 ("My IP" no sirve: los
+       runners de GitHub tienen IPs variables) y el puerto de PORT_FRONTEND
+       (3333) desde 0.0.0.0/0.
+     - La subred tiene ruta 0.0.0.0/0 -> Internet Gateway y la Network ACL
+       permite el tráfico.
+   Probar desde tu PC antes de relanzar el workflow:
+     PowerShell:  Test-NetConnection <IP> -Port 22   (TcpTestSucceeded : True)
+     Linux:       nc -zv <IP> 22
+   (Que falle el ping es normal: AWS bloquea ICMP por defecto.)
+
+3) unable to authenticate
+   Causa: la clave no corresponde a la key pair de la instancia o EC2_USER
+   no es correcto (en Ubuntu es "ubuntu").
+
+4) docker-compose: command not found
+   unknown shorthand flag: 'f' in -f
+   Causa: la EC2 tiene Docker pero NO el plugin Docker Compose V2. Sin el
+   plugin, "docker compose -f ..." se interpreta como "docker -f" y falla.
+   (El orden "docker compose -f a.yml -f b.yml pull" del workflow es correcto.)
+   Solución, en la EC2:
+     sudo apt-get update
+     sudo apt-get install -y docker-compose-v2 || sudo apt-get install -y docker-compose-plugin
+     docker compose version
+   Si ningún paquete existe, instalar el binario a mano
+   (en instancias ARM/Graviton usar aarch64 en lugar de x86_64):
+     sudo mkdir -p /usr/local/lib/docker/cli-plugins
+     sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+       -o /usr/local/lib/docker/cli-plugins/docker-compose
+     sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+5) Define POSTGRES_PASSWORD en .env / Define JWT_SECRET en .env
+   Causa: faltan los secrets POSTGRES_PASSWORD o JWT_SECRET en GitHub.
+
+6) cd: ... No such file or directory
+   Causa: el repo no está clonado en DEPLOY_PATH en la EC2 (ver PASO 1).
+
+7) denied / unauthorized al hacer docker login o pull de ghcr.io
+   Solución: crear el secret GHCR_PAT (token con read:packages) o hacer
+   públicos los paquetes en GitHub > Packages.
+
+8) permission denied ... /var/run/docker.sock
+   Solución: sudo usermod -aG docker ubuntu   (y reconectar la sesión SSH)
+
+9) El backend no conecta a la base de datos tras cambiar POSTGRES_PASSWORD
+   Causa: la BD ya existía con la contraseña anterior; cambiar el secret no
+   la modifica. Restaurar la contraseña original, o (BORRA LOS DATOS)
+   docker compose down -v y volver a desplegar.
