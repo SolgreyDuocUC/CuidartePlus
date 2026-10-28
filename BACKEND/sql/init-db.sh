@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 echo "========================================="
@@ -35,4 +35,3 @@ echo "Tablas creadas: $TABLE_COUNT"
 echo "========================================="
 echo "Base de datos inicializada correctamente."
 echo "========================================="
-
